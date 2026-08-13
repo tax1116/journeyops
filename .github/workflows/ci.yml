@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+  pull_request:
+    branches:
+      - main
+      - dev
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout with full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'corretto'
+
+      # PR: base 브랜치와의 공통 조상 SHA를 구한다
+      - name: Get merge-base commit SHA
+        if: github.event_name == 'pull_request'
+        run: |
+          BASE_BRANCH=${{ github.base_ref }}
+          MERGE_BASE_SHA=$(git merge-base refs/remotes/origin/${BASE_BRANCH} origin/${{ github.head_ref }})
+          echo "MERGE_BASE_SHA=${MERGE_BASE_SHA}" >> $GITHUB_ENV
+          echo "CACHE_BRANCH=${BASE_BRANCH}" >> $GITHUB_ENV
+        continue-on-error: true
+
+      # PR: 공통 조상 기준 캐시를 복원 (읽기 전용)
+      - name: Restore Gradle cache (PR)
+        if: github.event_name == 'pull_request'
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ env.CACHE_BRANCH }}-gradle-${{ env.MERGE_BASE_SHA }}
+
+      # push: 해당 브랜치 커밋 SHA로 캐시를 저장
+      - name: Save Gradle cache (push)
+        if: github.event_name == 'push'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ github.ref_name }}-gradle-${{ github.sha }}
+          restore-keys: ${{ github.ref_name }}-gradle-
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Build with Gradle
+        run: ./gradlew check
