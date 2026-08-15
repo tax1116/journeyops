@@ -1,0 +1,25 @@
+filebeat.inputs:
+  - type: filestream
+    id: journeyops-json
+    paths:
+      - /var/log/journeyops/*.json
+    parsers:
+      - ndjson:
+          target: ""
+          overwrite_keys: true
+          add_error_key: true
+
+output.elasticsearch:
+  hosts: ["http://elasticsearch:9200"]
+  pipeline: journeyops-redact
+  indices:
+    - index: journeyops-domain-%{+yyyy.MM.dd}
+      when.equals:
+        event.dataset: journeyops.domain-event
+    - index: journeyops-http-%{+yyyy.MM.dd}
+      when.equals:
+        event.dataset: journeyops.http
+    - index: journeyops-app-%{+yyyy.MM.dd}
+
+setup.ilm.enabled: false
+setup.template.enabled: false

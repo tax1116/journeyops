@@ -1,0 +1,7 @@
+.git
+.gradle
+.worktrees
+**/build
+!buildSrc/src/main/kotlin/kr/co/taek/dev/build
+!buildSrc/src/main/kotlin/kr/co/taek/dev/build/**
+**/.idea

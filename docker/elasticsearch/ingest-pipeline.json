@@ -1,0 +1,61 @@
+{
+  "description": "Defense-in-depth redaction for JourneyOps logs",
+  "processors": [
+    {
+      "gsub": {
+        "field": "message",
+        "pattern": "\\b(01[016789])([- ]?)\\d{3,4}([- ]?)(\\d{4})\\b",
+        "replacement": "$1$2****$3$4",
+        "ignore_missing": true
+      }
+    },
+    {
+      "gsub": {
+        "field": "message",
+        "pattern": "\\b(\\d{6})-[1-8]\\d{6}\\b",
+        "replacement": "$1-*******",
+        "ignore_missing": true
+      }
+    },
+    {
+      "gsub": {
+        "field": "message",
+        "pattern": "\\b([A-Za-z0-9])[A-Za-z0-9._%+-]*@([A-Za-z0-9.-]+\\.[A-Za-z]{2,})\\b",
+        "replacement": "$1***@$2",
+        "ignore_missing": true
+      }
+    },
+    {
+      "gsub": {
+        "field": "message",
+        "pattern": "\\b(\\d{4})[- ]?(\\d{2})\\d{2}[- ]?\\d{4}[- ]?(\\d{4})\\b",
+        "replacement": "$1$2******$3",
+        "ignore_missing": true
+      }
+    },
+    {
+      "gsub": {
+        "field": "message",
+        "pattern": "(?i)(Bearer\\s+)[A-Za-z0-9._~+/-]+=*",
+        "replacement": "$1[REDACTED]",
+        "ignore_missing": true
+      }
+    },
+    {
+      "gsub": {
+        "field": "message",
+        "pattern": "\\beyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\b",
+        "replacement": "[JWT_REDACTED]",
+        "ignore_missing": true
+      }
+    },
+    {
+      "gsub": {
+        "field": "custom.email",
+        "pattern": "\\b([A-Za-z0-9])[A-Za-z0-9._%+-]*@([A-Za-z0-9.-]+\\.[A-Za-z]{2,})\\b",
+        "replacement": "$1***@$2",
+        "ignore_missing": true
+      }
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "index_patterns": ["journeyops-http-*", "journeyops-app-*"],
+  "composed_of": ["journeyops-common"],
+  "priority": 200,
+  "template": {
+    "settings": {
+      "index.lifecycle.name": "journeyops-http-14d"
+    }
+  }
+}

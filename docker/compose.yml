@@ -1,0 +1,151 @@
+name: journeyops
+
+x-api: &api
+  build:
+    context: ..
+    dockerfile: docker/Dockerfile
+  restart: unless-stopped
+  volumes:
+    - journeyops-logs:/var/log/journeyops
+  networks: [journeyops]
+
+services:
+  user-api:
+    <<: *api
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      args:
+        MODULE: user-api
+    ports: ["8081:8081"]
+    environment:
+      JOURNEYOPS_LOG_FILE: /var/log/journeyops/user-api.json
+      LOAN_APPLICATION_API_BASE_URL: http://loan-application-api:8082
+      SENTRY_DSN: ${SENTRY_DSN:-}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8081/actuator/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  loan-application-api:
+    <<: *api
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      args:
+        MODULE: loan-application-api
+    ports: ["8082:8082"]
+    environment:
+      JOURNEYOPS_LOG_FILE: /var/log/journeyops/loan-application-api.json
+      USER_API_BASE_URL: http://user-api:8081
+      SENTRY_DSN: ${SENTRY_DSN:-}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8082/actuator/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  loan-evaluation-api:
+    <<: *api
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      args:
+        MODULE: loan-evaluation-api
+    ports: ["8083:8083"]
+    environment:
+      JOURNEYOPS_LOG_FILE: /var/log/journeyops/loan-evaluation-api.json
+      USER_API_BASE_URL: http://user-api:8081
+      LOAN_APPLICATION_API_BASE_URL: http://loan-application-api:8082
+      SENTRY_DSN: ${SENTRY_DSN:-}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8083/actuator/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  loan-contract-api:
+    <<: *api
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      args:
+        MODULE: loan-contract-api
+    ports: ["8084:8084"]
+    environment:
+      JOURNEYOPS_LOG_FILE: /var/log/journeyops/loan-contract-api.json
+      USER_API_BASE_URL: http://user-api:8081
+      LOAN_APPLICATION_API_BASE_URL: http://loan-application-api:8082
+      SENTRY_DSN: ${SENTRY_DSN:-}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8084/actuator/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:9.3.1
+    ports: ["9200:9200"]
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: -Xms512m -Xmx512m
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+    networks: [journeyops]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9200/_cluster/health >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+
+  elasticsearch-setup:
+    image: curlimages/curl:8.16.0
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    environment:
+      ELASTICSEARCH_URL: http://elasticsearch:9200
+    volumes:
+      - ./elasticsearch:/setup:ro
+    entrypoint: ["sh", "/setup/setup.sh"]
+    networks: [journeyops]
+    restart: "no"
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:9.3.1
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    ports: ["5601:5601"]
+    environment:
+      ELASTICSEARCH_HOSTS: http://elasticsearch:9200
+      XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY: journeyops-local-only-encryption-key-0001
+    networks: [journeyops]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:5601/api/status >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 60
+
+  filebeat:
+    image: docker.elastic.co/beats/filebeat:9.3.1
+    user: root
+    depends_on:
+      elasticsearch-setup:
+        condition: service_completed_successfully
+    command: ["-e", "--strict.perms=false"]
+    volumes:
+      - ./filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
+      - journeyops-logs:/var/log/journeyops:ro
+      - filebeat-data:/usr/share/filebeat/data
+    networks: [journeyops]
+
+networks:
+  journeyops:
+
+volumes:
+  elasticsearch-data:
+  filebeat-data:
+  journeyops-logs:
