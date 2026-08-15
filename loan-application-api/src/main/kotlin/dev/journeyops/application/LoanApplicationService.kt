@@ -3,6 +3,7 @@ package dev.journeyops.application
 import dev.journeyops.observability.DomainEvent
 import dev.journeyops.observability.DomainEventAction
 import dev.journeyops.observability.DomainEventPublisher
+import dev.journeyops.observability.LogContext
 import org.springframework.stereotype.Service
 import java.util.UUID
 
@@ -18,19 +19,22 @@ data class LoanApplicationResponse(
 class LoanApplicationService(
     private val repository: LoanApplicationRepository,
     private val eventPublisher: DomainEventPublisher,
+    private val logContext: LogContext = LogContext(),
 ) {
     fun create(userId: String): LoanApplicationResponse {
         val applicationId = UUID.randomUUID().toString()
         val eventId = UUID.randomUUID().toString()
         val application = repository.save(LoanApplication.create(applicationId, userId, eventId))
-        eventPublisher.publish(
-            DomainEvent(
-                eventId = eventId,
-                action = DomainEventAction.LOAN_APPLICATION_CREATED,
-                userId = userId,
-                applicationId = applicationId,
-            ),
-        )
+        logContext.withFields(mapOf("journey.channel" to "demo")) {
+            eventPublisher.publish(
+                DomainEvent(
+                    eventId = eventId,
+                    action = DomainEventAction.LOAN_APPLICATION_CREATED,
+                    userId = userId,
+                    applicationId = applicationId,
+                ),
+            )
+        }
         return application.toResponse(eventId, true)
     }
 

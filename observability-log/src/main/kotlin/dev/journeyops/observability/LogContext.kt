@@ -7,8 +7,9 @@ class LogContext {
         fields: Map<String, Any?>,
         block: () -> T,
     ): T {
-        val previous = fields.keys.associateWith(MDC::get)
-        fields.forEach { (key, value) ->
+        val customFields = fields.mapKeys { (key, _) -> key.takeIf { it.startsWith(CUSTOM_PREFIX) } ?: "$CUSTOM_PREFIX$key" }
+        val previous = customFields.keys.associateWith(MDC::get)
+        customFields.forEach { (key, value) ->
             if (value == null) {
                 MDC.remove(key)
             } else {
@@ -22,5 +23,9 @@ class LogContext {
                 if (value == null) MDC.remove(key) else MDC.put(key, value)
             }
         }
+    }
+
+    private companion object {
+        const val CUSTOM_PREFIX = "custom."
     }
 }

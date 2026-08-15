@@ -22,7 +22,7 @@ class SensitiveDataMasker {
 
     private companion object {
         const val MAX_INPUT_LENGTH = 16 * 1024
-        val JWT = Regex("(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{8,}(?![A-Za-z0-9_-])")
+        val JWT = Regex("(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{7,}\\.[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{8,}(?![A-Za-z0-9_-])")
         val BEARER = Regex("(?i)(Bearer\\s+)[A-Za-z0-9._~+/-]+=*")
         val PHONE = Regex("\\b(01[016789])([- ]?)\\d{3,4}([- ]?)(\\d{4})\\b")
         val RRN = Regex("\\b(\\d{6})-[1-8]\\d{6}\\b")

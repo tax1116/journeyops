@@ -24,7 +24,11 @@ class SensitiveDataMaskerTest {
     }
 
     @ParameterizedTest
-    @CsvSource("'v1.2.3'", "'127.0.0.1'")
+    @CsvSource(
+        "'v1.2.3'",
+        "'127.0.0.1'",
+        "'dev.journeyops.evaluation.LoanEvaluationApiApplicationKt'",
+    )
     fun `ordinary dotted values are not treated as JWT`(input: String) {
         assertEquals(input, masker.mask(input))
     }

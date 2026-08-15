@@ -30,7 +30,6 @@ class HttpAccessLogFilter(
                 .addKeyValue("url.path", request.requestURI)
                 .addKeyValue("http.response.status_code", response.status)
                 .addKeyValue("event.duration", System.nanoTime() - startedAt)
-                .addKeyValue(RequestId.MDC_KEY, requestId)
                 .log("http-access")
             MDC.remove(RequestId.MDC_KEY)
         }

@@ -10,8 +10,6 @@ logging:
       file: ecs
     json:
       customizer: dev.journeyops.observability.StructuredLogSanitizer
-      context:
-        prefix: custom
   file:
     name: ${JOURNEYOPS_LOG_FILE:build/logs/loan-application-api.json}
 management:

@@ -5,6 +5,7 @@ import ch.qos.logback.classic.spi.ILoggingEvent
 import ch.qos.logback.core.read.ListAppender
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.slf4j.LoggerFactory
 import org.springframework.mock.web.MockFilterChain
@@ -36,6 +37,18 @@ class HttpAccessLogFilterTest {
                 .single()
                 .keyValuePairs
                 .any { it.value.toString().contains("secret-token") },
+        )
+        assertTrue(
+            appender.list
+                .single()
+                .mdcPropertyMap
+                .containsKey(RequestId.MDC_KEY),
+        )
+        assertFalse(
+            appender.list
+                .single()
+                .keyValuePairs
+                .any { it.key == RequestId.MDC_KEY },
         )
     }
 }

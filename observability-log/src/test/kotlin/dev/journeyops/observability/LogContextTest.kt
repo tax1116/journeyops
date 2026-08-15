@@ -14,14 +14,14 @@ class LogContextTest {
 
     @Test
     fun `nested fields restore previous MDC values`() {
-        MDC.put("partner", "outer")
+        MDC.put("custom.partner", "outer")
 
         logContext.withFields(mapOf("partner" to "inner", "campaign" to "summer")) {
-            assertEquals("inner", MDC.get("partner"))
-            assertEquals("summer", MDC.get("campaign"))
+            assertEquals("inner", MDC.get("custom.partner"))
+            assertEquals("summer", MDC.get("custom.campaign"))
         }
 
-        assertEquals("outer", MDC.get("partner"))
-        assertNull(MDC.get("campaign"))
+        assertEquals("outer", MDC.get("custom.partner"))
+        assertNull(MDC.get("custom.campaign"))
     }
 }

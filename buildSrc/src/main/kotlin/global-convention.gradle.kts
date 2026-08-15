@@ -32,6 +32,7 @@ tasks.withType<Test> {
 }
 
 dependencies {
+    implementation(kotlin("reflect"))
     implementation(libs.kotlin.logging)
     testImplementation(libs.spring.boot.starter.test)
     testRuntimeOnly(libs.junit.platform.launcher)
