@@ -1,5 +1,7 @@
 package dev.journeyops.user
 
+import dev.journeyops.observability.ErrorReporter
+import dev.journeyops.observability.ProblemSupport
 import dev.journeyops.observability.RequestId
 import org.slf4j.MDC
 import org.springframework.http.HttpStatus
@@ -8,7 +10,9 @@ import org.springframework.web.bind.annotation.ExceptionHandler
 import org.springframework.web.bind.annotation.RestControllerAdvice
 
 @RestControllerAdvice
-class UserProblemHandler {
+class UserProblemHandler(
+    private val errorReporter: ErrorReporter = ErrorReporter.NOOP,
+) {
     @ExceptionHandler(IllegalArgumentException::class)
     fun invalidPhone(exception: IllegalArgumentException): ProblemDetail = problem(HttpStatus.BAD_REQUEST, "INVALID_PHONE_NUMBER", exception.message)
 
@@ -23,6 +27,17 @@ class UserProblemHandler {
 
     @ExceptionHandler(ApplicationUnavailableException::class)
     fun applicationUnavailable(exception: ApplicationUnavailableException): ProblemDetail = problem(HttpStatus.SERVICE_UNAVAILABLE, "APPLICATION_UNAVAILABLE", exception.message)
+
+    @ExceptionHandler(Exception::class)
+    fun unexpected(exception: Exception): ProblemDetail {
+        errorReporter.report(exception, "user-api", null)
+        return ProblemSupport.create(
+            HttpStatus.INTERNAL_SERVER_ERROR,
+            "UNEXPECTED_ERROR",
+            "Unexpected server error",
+            MDC.get(RequestId.MDC_KEY),
+        )
+    }
 
     private fun problem(
         status: HttpStatus,

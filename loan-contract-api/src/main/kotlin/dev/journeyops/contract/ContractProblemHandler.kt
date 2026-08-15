@@ -1,5 +1,7 @@
 package dev.journeyops.contract
 
+import dev.journeyops.observability.ErrorReporter
+import dev.journeyops.observability.ProblemSupport
 import dev.journeyops.observability.RequestId
 import org.slf4j.MDC
 import org.springframework.http.HttpStatus
@@ -8,7 +10,9 @@ import org.springframework.web.bind.annotation.ExceptionHandler
 import org.springframework.web.bind.annotation.RestControllerAdvice
 
 @RestControllerAdvice
-class ContractProblemHandler {
+class ContractProblemHandler(
+    private val errorReporter: ErrorReporter = ErrorReporter.NOOP,
+) {
     @ExceptionHandler(UpstreamHttpException::class)
     fun upstreamHttp(exception: UpstreamHttpException): ProblemDetail {
         val status = HttpStatus.resolve(exception.status) ?: HttpStatus.BAD_GATEWAY
@@ -17,6 +21,17 @@ class ContractProblemHandler {
 
     @ExceptionHandler(UpstreamUnavailableException::class)
     fun unavailable(): ProblemDetail = problem(HttpStatus.SERVICE_UNAVAILABLE, "UPSTREAM_UNAVAILABLE")
+
+    @ExceptionHandler(Exception::class)
+    fun unexpected(exception: Exception): ProblemDetail {
+        errorReporter.report(exception, "loan-contract-api", null)
+        return ProblemSupport.create(
+            HttpStatus.INTERNAL_SERVER_ERROR,
+            "UNEXPECTED_ERROR",
+            "Unexpected server error",
+            MDC.get(RequestId.MDC_KEY),
+        )
+    }
 
     private fun problem(
         status: HttpStatus,

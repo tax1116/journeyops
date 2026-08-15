@@ -1,5 +1,6 @@
 package dev.journeyops.observability
 
+import io.sentry.SentryOptions
 import org.springframework.boot.autoconfigure.AutoConfiguration
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
 import org.springframework.context.annotation.Bean
@@ -21,4 +22,12 @@ class ObservabilityAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean
     fun httpAccessLogFilter(): HttpAccessLogFilter = HttpAccessLogFilter()
+
+    @Bean
+    @ConditionalOnMissingBean(ErrorReporter::class)
+    fun errorReporter(): ErrorReporter = SentryErrorReporter()
+
+    @Bean
+    @ConditionalOnMissingBean(SentryOptions.BeforeSendCallback::class)
+    fun sentryPrivacyConfiguration(masker: SensitiveDataMasker): SentryOptions.BeforeSendCallback = SentryPrivacyConfiguration(masker)
 }

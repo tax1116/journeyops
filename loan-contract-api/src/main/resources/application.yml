@@ -27,3 +27,5 @@ journeyops:
 sentry:
   dsn: ${SENTRY_DSN:}
   send-default-pii: false
+  max-request-body-size: none
+  traces-sample-rate: 0.0

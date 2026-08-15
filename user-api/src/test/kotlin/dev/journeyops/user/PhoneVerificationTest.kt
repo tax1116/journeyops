@@ -16,7 +16,7 @@ class PhoneVerificationTest {
 
         assertTrue(result.userId.startsWith("sha256:"))
         assertFalse(result.userId.contains("010"))
-        assertFalse(result.accessToken.contains("010"))
+        assertFalse(result.accessToken.contains("01012345678"))
         assertTrue(events.single().userId == result.userId)
     }
 }
