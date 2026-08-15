@@ -1,9 +1,13 @@
 package dev.journeyops.application
 
+import org.springframework.stereotype.Repository
 import java.util.concurrent.ConcurrentHashMap
 
-class LoanApplicationNotFoundException(id: String) : RuntimeException("Loan application $id was not found")
+class LoanApplicationNotFoundException(
+    id: String,
+) : RuntimeException("Loan application $id was not found")
 
+@Repository
 class LoanApplicationRepository {
     private val applications = ConcurrentHashMap<String, LoanApplication>()
 
