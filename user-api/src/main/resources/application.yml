@@ -1,0 +1,25 @@
+server:
+  port: 8081
+spring:
+  application:
+    name: user-api
+logging:
+  structured:
+    format:
+      console: ecs
+      file: ecs
+    json:
+      customizer: dev.journeyops.observability.StructuredLogSanitizer
+  file:
+    name: ${JOURNEYOPS_LOG_FILE:build/logs/user-api.json}
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  tracing:
+    sampling:
+      probability: 1.0
+sentry:
+  dsn: ${SENTRY_DSN:}
+  send-default-pii: false
