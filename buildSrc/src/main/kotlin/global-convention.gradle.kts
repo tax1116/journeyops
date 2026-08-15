@@ -6,7 +6,7 @@ plugins {
     id("org.jlleitschuh.gradle.ktlint")
 }
 
-group = "kr.co.taek.dev"
+group = "dev.journeyops"
 
 java {
     toolchain {
