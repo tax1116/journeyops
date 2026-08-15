@@ -24,6 +24,7 @@ spring-dependency-management = { module = "io.spring.gradle:dependency-managemen
 
 # test
 spring-boot-starter-test = { module = "org.springframework.boot:spring-boot-starter-test" }
+junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher" }
 
 # spring
 spring-boot-dependencies-bom = { module = "org.springframework.boot:spring-boot-dependencies", version.ref = "spring-boot" }
