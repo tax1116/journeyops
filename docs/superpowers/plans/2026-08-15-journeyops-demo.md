@@ -16,6 +16,9 @@
 - 클라이언트는 access token과 `applicationId`만 보관합니다.
 - 로그에 access token, 휴대폰 번호, 주민등록번호, 신분증 원문, 요청 본문을 기록하지 않습니다.
 - 도메인 이벤트는 `event.action`, `event.id`, `event.dataset`, `event.outcome`, `user.id`, `loan.application.id` 필드를 사용합니다.
+- 플랫폼 예약 필드가 아닌 MDC 값은 `custom` 아래로 이동하고 Elasticsearch에서 `flattened`로 저장합니다.
+- message, MDC, 예외, Sentry 이벤트, Elasticsearch ingest 경로에 휴대폰·주민번호·이메일·카드·Bearer token·JWT 마스킹을 적용합니다.
+- Kibana에 다섯 Saved Discover, 세 로그 대시보드, 두 Elasticsearch query rule을 자동 구성합니다.
 - 오류 응답은 RFC 9457 Problem Details와 `code`, `requestId` 확장 필드를 사용합니다.
 - Sentry는 `SENTRY_DSN`이 비어 있으면 외부 전송 없이 동작하고 `send-default-pii=false`를 유지합니다.
 - 모든 기능은 실패하는 테스트를 먼저 확인한 뒤 최소 구현으로 통과시킵니다.
@@ -32,13 +35,19 @@ observability-log/
     DomainEventAction.kt
     DomainEventLogger.kt
     HttpAccessLogFilter.kt
+    LogContext.kt
     ObservabilityAutoConfiguration.kt
     RequestId.kt
+    SensitiveDataMasker.kt
+    StructuredLogSanitizer.kt
   src/main/resources/META-INF/spring/
     org.springframework.boot.autoconfigure.AutoConfiguration.imports
   src/test/kotlin/dev/journeyops/observability/
     DomainEventLoggerTest.kt
     HttpAccessLogFilterTest.kt
+    LogContextTest.kt
+    SensitiveDataMaskerTest.kt
+    StructuredLogSanitizerTest.kt
 
 user-api/
   src/main/kotlin/dev/journeyops/user/
@@ -94,10 +103,20 @@ docker/
   Dockerfile
   compose.yml
   filebeat.yml
+  elasticsearch/
+    component-template.json
+    domain-index-template.json
+    http-index-template.json
+    ingest-pipeline.json
+    setup.sh
+  kibana/
+    saved-objects.ndjson
+    setup.sh
 scripts/
   smoke.sh
 docs/
   kibana-funnel.md
+  log-analytics.md
 ```
 
 ---
@@ -201,7 +220,7 @@ Tested: ./gradlew projects"
 
 ---
 
-### Task 2: 공통 ECS 도메인 이벤트와 HTTP 요청 로그
+### Task 2: 공통 ECS 로그 문맥, 도메인 이벤트, 개인정보 마스킹
 
 **Files:**
 - Create: `observability-log/src/main/kotlin/dev/journeyops/observability/DomainEvent.kt`
@@ -209,16 +228,25 @@ Tested: ./gradlew projects"
 - Create: `observability-log/src/main/kotlin/dev/journeyops/observability/DomainEventLogger.kt`
 - Create: `observability-log/src/main/kotlin/dev/journeyops/observability/RequestId.kt`
 - Create: `observability-log/src/main/kotlin/dev/journeyops/observability/HttpAccessLogFilter.kt`
+- Create: `observability-log/src/main/kotlin/dev/journeyops/observability/LogContext.kt`
+- Create: `observability-log/src/main/kotlin/dev/journeyops/observability/SensitiveDataMasker.kt`
+- Create: `observability-log/src/main/kotlin/dev/journeyops/observability/StructuredLogSanitizer.kt`
 - Create: `observability-log/src/main/kotlin/dev/journeyops/observability/ObservabilityAutoConfiguration.kt`
 - Create: `observability-log/src/main/resources/META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports`
 - Create: `observability-log/src/test/kotlin/dev/journeyops/observability/DomainEventLoggerTest.kt`
 - Create: `observability-log/src/test/kotlin/dev/journeyops/observability/HttpAccessLogFilterTest.kt`
+- Create: `observability-log/src/test/kotlin/dev/journeyops/observability/LogContextTest.kt`
+- Create: `observability-log/src/test/kotlin/dev/journeyops/observability/SensitiveDataMaskerTest.kt`
+- Create: `observability-log/src/test/kotlin/dev/journeyops/observability/StructuredLogSanitizerTest.kt`
 
 **Interfaces:**
 - Produces: `DomainEvent(eventId: String, action: String, userId: String?, applicationId: String?, outcome: String = "success")`
 - Produces: `DomainEventPublisher.publish(event: DomainEvent)` implemented by `DomainEventLogger`
 - Produces: `DomainEventAction` string constants for all nine business events
 - Produces: servlet filter that accepts or creates `X-Request-Id` and exposes it as response header and MDC field `http.request.id`
+- Produces: `LogContext.withFields(fields: Map<String, Any?>, block: () -> T): T` with nested value restoration
+- Produces: `SensitiveDataMasker.mask(value: String): String`
+- Produces: `StructuredLogSanitizer` that protects reserved fields, moves ad-hoc fields under `custom`, and masks every string leaf
 
 - [ ] **Step 1: 도메인 이벤트의 필수 구조를 검증하는 실패 테스트 작성**
 
@@ -275,7 +303,65 @@ object DomainEventAction {
 
 `DomainEventPublisher` 인터페이스와 실제 구현 `DomainEventLogger`를 만듭니다. 로거는 SLF4J fluent API의 `addKeyValue`를 사용하며 null 필드는 추가하지 않습니다. 메시지는 항상 `domain-event`로 고정합니다.
 
-- [ ] **Step 4: 요청 ID와 HTTP 로그 실패 테스트 작성**
+- [ ] **Step 4: scoped MDC와 자유 필드 격리 실패 테스트 작성**
+
+```kotlin
+@Test
+fun `nested fields restore previous MDC values`() {
+    MDC.put("partner", "outer")
+
+    logContext.withFields(mapOf("partner" to "inner", "campaign" to "summer")) {
+        assertEquals("inner", MDC.get("partner"))
+        assertEquals("summer", MDC.get("campaign"))
+    }
+
+    assertEquals("outer", MDC.get("partner"))
+    assertNull(MDC.get("campaign"))
+}
+
+@Test
+fun `sanitizer protects reserved fields and moves unknown fields to custom`() {
+    val members = linkedMapOf<String, Any>(
+        "service.name" to "loan-evaluation-api",
+        "partner" to "kakao-bank",
+    )
+
+    sanitizer.customize(members)
+
+    assertEquals("loan-evaluation-api", members["service.name"])
+    assertEquals(mapOf("partner" to "kakao-bank"), members["custom"])
+    assertFalse(members.containsKey("partner"))
+}
+```
+
+- [ ] **Step 5: 개인정보 마스킹 실패 테스트 작성**
+
+```kotlin
+@ParameterizedTest
+@CsvSource(
+    "'010-1234-5678','010-****-5678'",
+    "'900101-1234567','900101-*******'",
+    "'theo@example.com','t***@example.com'",
+    "'1234-5678-9012-3456','123456******3456'",
+    "'Bearer secret-token','Bearer [REDACTED]'",
+    "'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjMifQ.signature123','[REDACTED_JWT]'",
+)
+fun `sensitive values are masked before serialization`(input: String, expected: String) {
+    assertEquals(expected, masker.mask(input))
+}
+```
+
+Run: `./gradlew :observability-log:test --tests '*LogContextTest' --tests '*SensitiveDataMaskerTest' --tests '*StructuredLogSanitizerTest'`
+
+Expected: 문맥, 마스커, sanitizer 타입이 없어 컴파일 실패합니다.
+
+- [ ] **Step 6: scoped MDC, 예약 필드, custom 격리, 마스커 최소 구현**
+
+`LogContext`는 전달된 키의 기존 값을 복사하고 `finally`에서 기존 값은 복원하며 새 키는 제거합니다. `StructuredLogSanitizer`는 `@timestamp`, `service.*`, `trace.*`, `span.*`, `http.*`, `event.*`, `error.*`, `user.id`, `loan.application.id`를 예약하고 나머지 MDC 필드를 `custom` map으로 이동합니다.
+
+`SensitiveDataMasker`는 사전 컴파일한 정규식과 16 KiB 입력 상한을 사용합니다. JWT는 점으로 구분된 세 구간이 각각 최소 길이를 만족할 때만 탐지해 일반 버전 문자열의 오탐을 줄입니다. 문자열이 상한보다 길면 먼저 상한으로 자른 뒤 마스킹하고 `[TRUNCATED]`를 붙입니다. structured log의 message, exception message, MDC, custom map의 모든 문자열 leaf에 적용합니다. `StructuredLogSanitizer`의 public no-arg constructor는 동일한 기본 마스킹 정책을 생성해 Spring Boot의 `logging.structured.json.customizer`가 직접 인스턴스화할 수 있게 합니다.
+
+- [ ] **Step 7: 요청 ID와 HTTP 로그 실패 테스트 작성**
 
 ```kotlin
 @Test
@@ -291,11 +377,11 @@ fun `filter returns request id and never logs authorization header`() {
 }
 ```
 
-- [ ] **Step 5: 요청 필터 최소 구현 후 전체 모듈 테스트**
+- [ ] **Step 8: 요청 필터와 자동 구성 구현 후 전체 모듈 테스트**
 
 필터는 `OncePerRequestFilter`를 상속하고 `System.nanoTime()`으로 지연을 계산합니다. 요청 종료 시 `journeyops.http`, HTTP method, URL path, status code, duration, request ID만 key-value로 기록하고 MDC를 반드시 제거합니다.
 
-`ObservabilityAutoConfiguration`은 `DomainEventPublisher`와 `HttpAccessLogFilter`를 조건부 bean으로 등록합니다. imports 파일에는 다음 한 줄을 기록해 각 API의 기본 component scan 범위와 무관하게 적용합니다.
+`ObservabilityAutoConfiguration`은 `DomainEventPublisher`, `LogContext`, `SensitiveDataMasker`, `HttpAccessLogFilter`를 조건부 bean으로 등록합니다. 각 API의 `logging.structured.json.customizer`는 `dev.journeyops.observability.StructuredLogSanitizer`를 지정합니다. imports 파일에는 다음 한 줄을 기록해 각 API의 기본 component scan 범위와 무관하게 적용합니다.
 
 ```text
 dev.journeyops.observability.ObservabilityAutoConfiguration
@@ -305,13 +391,13 @@ Run: `./gradlew :observability-log:test`
 
 Expected: 모든 테스트가 통과합니다.
 
-- [ ] **Step 6: 커밋**
+- [ ] **Step 9: 커밋**
 
 ```bash
 git add observability-log
-git commit -m "업무 사건과 요청 로그를 동일한 ECS 규약으로 남긴다" -m "Constraint: 원문 고객 데이터와 인증 헤더는 로그에서 제외한다
+git commit -m "자유로운 로그 문맥을 안전한 ECS 필드로 정규화한다" -m "Constraint: 원문 고객 데이터와 인증 헤더는 로그에서 제외한다
 Confidence: high
-Scope-risk: narrow
+Scope-risk: moderate
 Tested: ./gradlew :observability-log:test"
 ```
 
@@ -810,13 +896,16 @@ Tested: ./gradlew :loan-contract-api:test :loan-contract-api:bootJar"
 **Files:**
 - Create: `observability-log/src/main/kotlin/dev/journeyops/observability/ProblemSupport.kt`
 - Create: `observability-log/src/main/kotlin/dev/journeyops/observability/SentryErrorReporter.kt`
+- Create: `observability-log/src/main/kotlin/dev/journeyops/observability/SentryPrivacyConfiguration.kt`
 - Create: `observability-log/src/test/kotlin/dev/journeyops/observability/SentryErrorReporterTest.kt`
+- Create: `observability-log/src/test/kotlin/dev/journeyops/observability/SentryPrivacyConfigurationTest.kt`
 - Modify: four `*ProblemHandler.kt` files
 - Modify: four `application.yml` files
 
 **Interfaces:**
 - Produces: `ProblemSupport.create(status, code, detail, requestId): ProblemDetail`
 - Produces: `ErrorReporter.report(throwable: Throwable, serviceName: String, applicationId: String?)`
+- Produces: Sentry `beforeSend` callback that applies `SensitiveDataMasker` to event messages, exceptions, breadcrumbs and tags and removes request bodies and authorization headers
 - Produces: demo-only `POST /api/v1/demo/failures` in `user-api` returning sanitized 500 Problem Details
 
 - [ ] **Step 1: 민감정보 제거와 태그 테스트 작성**
@@ -830,17 +919,31 @@ fun `error reporter sends bounded tags and no authorization value`() {
     assertEquals("app-1", captured.tags["loan.application.id"])
     assertFalse(captured.tags.values.any { it.contains("Bearer") })
 }
+
+@Test
+fun `before send masks exception and removes request credentials`() {
+    val event = eventWithMessageAndAuthorization(
+        "customer 010-1234-5678 failed",
+        "Bearer secret-token",
+    )
+
+    val sanitized = callback.execute(event, Hint())!!
+
+    assertEquals("customer 010-****-5678 failed", sanitized.message!!.formatted)
+    assertNull(sanitized.request!!.headers["Authorization"])
+    assertNull(sanitized.request!!.data)
+}
 ```
 
 - [ ] **Step 2: 실패 확인**
 
-Run: `./gradlew :observability-log:test --tests '*SentryErrorReporterTest'`
+Run: `./gradlew :observability-log:test --tests '*SentryErrorReporterTest' --tests '*SentryPrivacyConfigurationTest'`
 
-Expected: 오류 보고 타입이 없어 컴파일 실패합니다.
+Expected: 오류 보고와 Sentry privacy 타입이 없어 컴파일 실패합니다.
 
 - [ ] **Step 3: Sentry 보고와 공통 ProblemDetail 생성 구현**
 
-`SentryErrorReporter`는 `Sentry.withScope` 안에서 허용된 두 태그만 추가하고 `Sentry.captureException`을 호출합니다. `sentry.send-default-pii=false`, `sentry.max-request-body-size=none`, `sentry.traces-sample-rate=0.0`을 네 서비스에 적용해 Elastic 추적과 역할이 중복되지 않도록 합니다.
+`SentryErrorReporter`는 `Sentry.withScope` 안에서 허용된 두 태그만 추가하고 `Sentry.captureException`을 호출합니다. `SentryPrivacyConfiguration`은 Task 2의 `SensitiveDataMasker`를 재사용해 event message, exception value, breadcrumb message, tag value를 마스킹하고 request body와 인증 헤더를 제거합니다. `sentry.send-default-pii=false`, `sentry.max-request-body-size=none`, `sentry.traces-sample-rate=0.0`을 네 서비스에 적용해 Elastic 추적과 역할이 중복되지 않도록 합니다.
 
 - [ ] **Step 4: 네 오류 핸들러가 예상하지 못한 예외만 보고하도록 변경**
 
@@ -856,7 +959,7 @@ Expected: 모든 단위·API 계약 테스트가 통과합니다.
 
 ```bash
 git add observability-log user-api loan-application-api loan-evaluation-api loan-contract-api
-git commit -m "예상 밖의 서버 오류만 개인정보 없이 Sentry로 보낸다" -m "Rejected: 모든 4xx 보고 | 운영 이슈 신호를 오염시킨다
+git commit -m "예상 밖의 서버 오류만 마스킹한 뒤 Sentry로 보낸다" -m "Rejected: 모든 4xx 보고 | 운영 이슈 신호를 오염시킨다
 Confidence: high
 Scope-risk: moderate
 Tested: ./gradlew :observability-log:test :user-api:test :loan-application-api:test :loan-evaluation-api:test :loan-contract-api:test"
@@ -870,12 +973,20 @@ Tested: ./gradlew :observability-log:test :user-api:test :loan-application-api:t
 - Create: `docker/Dockerfile`
 - Create: `docker/compose.yml`
 - Create: `docker/filebeat.yml`
+- Create: `docker/elasticsearch/component-template.json`
+- Create: `docker/elasticsearch/http-index-template.json`
+- Create: `docker/elasticsearch/domain-index-template.json`
+- Create: `docker/elasticsearch/ingest-pipeline.json`
+- Create: `docker/elasticsearch/setup.sh`
 - Create: `.dockerignore`
 - Modify: `.gitignore`
 
 **Interfaces:**
 - Produces: ports 8081-8084, 9200, 5601
-- Produces: Elasticsearch indices `journeyops-*`
+- Produces: Elasticsearch indices `journeyops-http-*`, `journeyops-domain-*`, `journeyops-app-*`
+- Produces: explicit mappings including `custom` as `flattened`
+- Produces: ingest pipeline `journeyops-redact`
+- Produces: ILM policies `journeyops-http-14d` for HTTP·app logs and `journeyops-domain-90d` for domain events
 - Consumes: each service bootJar and JSON log file
 
 - [ ] **Step 1: jar와 Docker 구성 전 검증**
@@ -904,7 +1015,61 @@ ENTRYPOINT ["java", "-jar", "/app/app.jar"]
 
 `docker/compose.yml`은 API별 `MODULE`, 포트, upstream URL, `/var/log/journeyops` 공유 볼륨을 설정합니다. Elasticsearch, Kibana, Filebeat 이미지는 모두 `9.3.1`로 고정합니다. Elasticsearch는 로컬 전용으로 `discovery.type=single-node`, `xpack.security.enabled=false`, `ES_JAVA_OPTS=-Xms512m -Xmx512m`를 사용합니다.
 
-- [ ] **Step 4: Filebeat NDJSON 입력 정의**
+- [ ] **Step 4: field mapping, ILM, ingest pipeline 실패 검증 작성**
+
+`docker/elasticsearch/setup.sh`는 Elasticsearch가 준비된 뒤 두 ILM policy, 공통 component template, 두 index template, `journeyops-redact` pipeline을 PUT하고 `_simulate`로 다음 문서가 마스킹되는지 검사합니다.
+
+```json
+{
+  "docs": [
+    {
+      "_source": {
+        "message": "customer 010-1234-5678 used Bearer secret-token",
+        "custom": { "email": "theo@example.com" }
+      }
+    }
+  ]
+}
+```
+
+Expected simulated source:
+
+```json
+{
+  "message": "customer 010-****-5678 used Bearer [REDACTED]",
+  "custom": { "email": "t***@example.com" }
+}
+```
+
+공통 component template은 다음 mapping을 포함합니다.
+
+```json
+{
+  "template": {
+    "mappings": {
+      "properties": {
+        "service": { "properties": { "name": { "type": "keyword" } } },
+        "event": {
+          "properties": {
+            "action": { "type": "keyword" },
+            "dataset": { "type": "keyword" },
+            "duration": { "type": "long" },
+            "outcome": { "type": "keyword" }
+          }
+        },
+        "http": { "properties": { "response": { "properties": { "status_code": { "type": "integer" } } } } },
+        "trace": { "properties": { "id": { "type": "keyword" } } },
+        "user": { "properties": { "id": { "type": "keyword" } } },
+        "loan": { "properties": { "application": { "properties": { "id": { "type": "keyword" } } } } },
+        "error": { "properties": { "code": { "type": "keyword" } } },
+        "custom": { "type": "flattened" }
+      }
+    }
+  }
+}
+```
+
+- [ ] **Step 5: Filebeat NDJSON 입력과 데이터셋 라우팅 정의**
 
 ```yaml
 filebeat.inputs:
@@ -919,14 +1084,18 @@ filebeat.inputs:
 
 output.elasticsearch:
   hosts: ["http://elasticsearch:9200"]
-  index: "journeyops-%{+yyyy.MM.dd}"
-
-setup.template:
-  name: "journeyops"
-  pattern: "journeyops-*"
+  pipeline: "journeyops-redact"
+  indices:
+    - index: "journeyops-domain-%{+yyyy.MM.dd}"
+      when.equals:
+        event.dataset: "journeyops.domain-event"
+    - index: "journeyops-http-%{+yyyy.MM.dd}"
+      when.equals:
+        event.dataset: "journeyops.http"
+    - index: "journeyops-app-%{+yyyy.MM.dd}"
 ```
 
-- [ ] **Step 5: Compose 문법과 이미지 빌드 검증**
+- [ ] **Step 6: Compose 문법, Elasticsearch 설정, 이미지 빌드 검증**
 
 Run: `docker compose -f docker/compose.yml config`
 
@@ -936,28 +1105,39 @@ Run: `docker compose -f docker/compose.yml build`
 
 Expected: 네 API 이미지가 성공적으로 생성됩니다.
 
-- [ ] **Step 6: 커밋**
+Run: `bash docker/elasticsearch/setup.sh`
+
+Expected: pipeline `_simulate`, field mapping, 14일·90일 ILM policy 검사가 성공합니다.
+
+- [ ] **Step 7: 커밋**
 
 ```bash
 git add docker .dockerignore .gitignore
-git commit -m "한 명령으로 서비스와 로그 검색 환경을 재현한다" -m "Constraint: Elastic 보안 비활성화는 로컬 데모에만 허용한다
+git commit -m "로그를 검색 가능한 필드와 보존 정책으로 수집한다" -m "Constraint: Elastic 보안 비활성화는 로컬 데모에만 허용한다
 Confidence: medium
 Scope-risk: moderate
-Tested: docker compose -f docker/compose.yml config; docker compose -f docker/compose.yml build"
+Tested: docker compose -f docker/compose.yml config; docker compose -f docker/compose.yml build; bash docker/elasticsearch/setup.sh"
 ```
 
 ---
 
-### Task 11: 전체 여정 smoke 테스트와 Kibana 사용 문서
+### Task 11: 전체 여정 smoke 테스트와 Kibana 로그 분석 패키지
 
 **Files:**
 - Create: `scripts/smoke.sh`
 - Create: `docs/kibana-funnel.md`
+- Create: `docs/log-analytics.md`
+- Create: `docker/kibana/saved-objects.ndjson`
+- Create: `docker/kibana/setup.sh`
 - Modify: `README.md`
 
 **Interfaces:**
 - Produces: one-command journey verification using `curl` and `jq`
-- Produces: Kibana data view, KQL, funnel construction instructions
+- Produces: data view `journeyops-*`
+- Produces: five Saved Discover sessions
+- Produces: dashboards `JourneyOps - Service Health`, `JourneyOps - Loan Journey`, `JourneyOps - Error Investigation`
+- Produces: query rules `JourneyOps 5xx Burst`, `JourneyOps Upstream Failure Burst`
+- Produces: KQL and ES|QL operations guide
 
 - [ ] **Step 1: 실패하는 smoke 스크립트 작성**
 
@@ -974,7 +1154,7 @@ application_response=$(curl -fsS -X POST http://localhost:8082/api/v1/loan-appli
 application_id=$(jq -er '.applicationId' <<<"$application_response")
 ```
 
-이후 8083 한도조회, 8082 신청서 제출, 8081 신분증 확인, 8082 서류 제출, 8083 심사, 8084 약정과 지급을 순서대로 호출합니다. 마지막으로 Elasticsearch refresh 후 `loan.application.id.keyword`의 term query로 신청 관련 사건 8개를 검증합니다. 검색 결과에서 `trace.id`가 비어 있지 않은 서비스 간 호출 사건도 하나 이상 검증합니다.
+이후 8083 한도조회, 8082 신청서 제출, 8081 신분증 확인, 8082 서류 제출, 8083 심사, 8084 약정과 지급을 순서대로 호출합니다. 마지막으로 Elasticsearch refresh 후 keyword로 명시 매핑된 `loan.application.id`의 term query로 신청 관련 사건 8개를 검증합니다. 검색 결과에서 `trace.id`가 비어 있지 않은 서비스 간 호출 사건도 하나 이상 검증합니다.
 
 - [ ] **Step 2: 서비스 미기동 상태에서 실패 확인**
 
@@ -990,7 +1170,42 @@ Run: `bash scripts/smoke.sh`
 
 Expected: `Journey completed: <applicationId>, 8 application events indexed`가 출력됩니다.
 
-- [ ] **Step 4: Kibana 퍼널 문서 작성**
+- [ ] **Step 4: Kibana saved objects와 query rule 설정 작성**
+
+`saved-objects.ndjson`은 data view와 다음 Saved Discover session을 포함합니다.
+
+```text
+JourneyOps - 5xx Errors
+  event.dataset : "journeyops.http" and http.response.status_code >= 500
+JourneyOps - Slow Requests
+  event.dataset : "journeyops.http" and event.duration >= 1000000000
+JourneyOps - Upstream Failures
+  error.code : "UPSTREAM_UNAVAILABLE"
+JourneyOps - Application Timeline
+  loan.application.id : *
+JourneyOps - Domain Funnel Events
+  event.dataset : "journeyops.domain-event"
+```
+
+세 대시보드는 saved search와 Lens·ES|QL panel을 조합하고 `service.name`, `event.action`, `event.outcome`, `loan.application.id` controls를 제공합니다.
+
+`docker/kibana/setup.sh`은 saved objects import 뒤 고정 ID로 두 Elasticsearch query rule을 생성합니다.
+
+```text
+JourneyOps 5xx Burst
+  Query: event.dataset:"journeyops.http" and http.response.status_code >= 500
+  Threshold: count >= 5 in 5 minutes
+  Group by: service.name
+
+JourneyOps Upstream Failure Burst
+  Query: error.code:"UPSTREAM_UNAVAILABLE"
+  Threshold: count >= 3 in 5 minutes
+  Group by: service.name
+```
+
+외부 connector action은 설정하지 않고 Kibana alert 상태만 생성합니다. Compose의 Kibana 서비스에는 32자 이상의 고정된 로컬 전용 `xpack.encryptedSavedObjects.encryptionKey`를 설정합니다.
+
+- [ ] **Step 5: Kibana 퍼널과 로그 분석 문서 작성**
 
 `docs/kibana-funnel.md`에 다음을 정확히 포함합니다.
 
@@ -1013,11 +1228,43 @@ loan-payment-completed
 
 휴대폰 인증은 신청 생성 이전 사건이므로 `user.id`로 연결해 별도 선행 단계로 분석한다고 설명합니다.
 
-- [ ] **Step 5: README에 실행·Sentry·종료 명령 추가**
+`docs/log-analytics.md`에는 필드 사전, Saved Discover 사용법, 세 대시보드의 목적, 두 rule의 임계치와 다음 ES|QL을 포함합니다.
+
+```esql
+FROM journeyops-http-*
+| WHERE event.dataset == "journeyops.http"
+| STATS requests = COUNT(*), p95_latency = PERCENTILE(event.duration, 95) BY service.name
+| SORT p95_latency DESC
+```
+
+```esql
+FROM journeyops-domain-*
+| WHERE event.dataset == "journeyops.domain-event"
+| STATS applications = COUNT_DISTINCT(loan.application.id) BY event.action
+```
+
+```esql
+FROM journeyops-*
+| WHERE loan.application.id == "app-456"
+| SORT @timestamp ASC
+| KEEP @timestamp, service.name, event.action, message, trace.id, error.code
+```
+
+- [ ] **Step 6: Kibana 구성과 전체 여정 검증**
+
+Run: `bash docker/kibana/setup.sh`
+
+Expected: data view 1개, Saved Discover 5개, dashboard 3개, rule 2개가 생성됩니다.
+
+Run: `bash scripts/smoke.sh`
+
+Expected: 대출 여정 사건 8개, trace 필드, `custom` 필드 검색, 마스킹된 테스트 메시지를 확인합니다.
+
+- [ ] **Step 7: README에 실행·Sentry·종료 명령 추가**
 
 README에는 `docker compose -f docker/compose.yml up -d --build`, `bash scripts/smoke.sh`, Kibana URL, 선택적 `SENTRY_DSN`, `docker compose -f docker/compose.yml down -v`를 포함합니다.
 
-- [ ] **Step 6: 전체 정적 검증**
+- [ ] **Step 8: 전체 정적 검증**
 
 Run: `./gradlew check`
 
@@ -1027,13 +1274,13 @@ Run: `git diff --check`
 
 Expected: 출력 없이 exit code 0입니다.
 
-- [ ] **Step 7: 최종 커밋**
+- [ ] **Step 9: 최종 커밋**
 
 ```bash
-git add scripts docs README.md
-git commit -m "대출 여정과 퍼널 분석을 재현 가능한 검증으로 남긴다" -m "Confidence: high
+git add scripts docs docker/kibana README.md
+git commit -m "반복 가능한 로그 탐색과 운영 대시보드를 함께 제공한다" -m "Confidence: high
 Scope-risk: narrow
-Tested: ./gradlew check; bash scripts/smoke.sh; git diff --check"
+Tested: ./gradlew check; bash docker/kibana/setup.sh; bash scripts/smoke.sh; git diff --check"
 ```
 
 ---
@@ -1045,6 +1292,10 @@ Tested: ./gradlew check; bash scripts/smoke.sh; git diff --check"
 - [ ] `docker compose -f docker/compose.yml up -d --build` 후 모든 healthcheck가 healthy입니다.
 - [ ] `bash scripts/smoke.sh`가 동일 신청 ID의 여덟 사건을 확인합니다.
 - [ ] `curl -fsS http://localhost:9200/_cat/indices/journeyops-*?v`에서 인덱스를 확인합니다.
+- [ ] Elasticsearch mapping에서 `custom`이 `flattened`, `event.duration`이 `long`, `http.response.status_code`가 `integer`입니다.
+- [ ] `journeyops-redact` pipeline `_simulate`가 휴대폰·주민번호·이메일·카드·Bearer token·JWT를 마스킹합니다.
+- [ ] Kibana에 Saved Discover 5개, dashboard 3개, query rule 2개가 존재합니다.
+- [ ] scoped MDC의 중첩 값 복원과 예약 필드 보호가 자동화 테스트로 검증됩니다.
 - [ ] `POST /api/v1/demo/failures`가 민감정보 없는 500 Problem Details와 구조화 로그를 남깁니다.
 - [ ] `SENTRY_DSN`을 설정하지 않은 상태에서도 모든 API가 정상 기동합니다.
 - [ ] `git status --short`에 계획된 변경 외의 파일이 없습니다.
