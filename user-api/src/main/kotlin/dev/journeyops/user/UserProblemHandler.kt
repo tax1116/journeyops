@@ -15,6 +15,15 @@ class UserProblemHandler {
     @ExceptionHandler(InvalidAccessTokenException::class)
     fun invalidToken(exception: InvalidAccessTokenException): ProblemDetail = problem(HttpStatus.UNAUTHORIZED, "INVALID_ACCESS_TOKEN", exception.message)
 
+    @ExceptionHandler(ApplicationUpstreamException::class)
+    fun applicationError(exception: ApplicationUpstreamException): ProblemDetail {
+        val status = HttpStatus.resolve(exception.status) ?: HttpStatus.BAD_GATEWAY
+        return problem(status, "APPLICATION_${status.value()}", exception.message)
+    }
+
+    @ExceptionHandler(ApplicationUnavailableException::class)
+    fun applicationUnavailable(exception: ApplicationUnavailableException): ProblemDetail = problem(HttpStatus.SERVICE_UNAVAILABLE, "APPLICATION_UNAVAILABLE", exception.message)
+
     private fun problem(
         status: HttpStatus,
         code: String,

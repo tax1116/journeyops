@@ -14,14 +14,16 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders
 class UserControllerTest {
     private lateinit var tokenStore: TokenStore
     private lateinit var mockMvc: MockMvc
+    private lateinit var applicationGateway: FakeApplicationGateway
 
     @BeforeEach
     fun setUp() {
         tokenStore = TokenStore()
+        applicationGateway = FakeApplicationGateway()
         val verifier = PhoneVerifier(tokenStore, DomainEventPublisher { })
         mockMvc =
             MockMvcBuilders
-                .standaloneSetup(UserController(verifier, tokenStore))
+                .standaloneSetup(UserController(verifier, tokenStore, applicationGateway, DomainEventPublisher { }))
                 .setControllerAdvice(UserProblemHandler())
                 .build()
     }
@@ -52,5 +54,28 @@ class UserControllerTest {
             .perform(get("/internal/v1/users/me").header("Authorization", "Bearer ${verified.accessToken}"))
             .andExpect(status().isOk)
             .andExpect(jsonPath("$.userId").value(verified.userId))
+    }
+
+    @Test
+    fun `identity verification transitions the owned application`() {
+        val verified = PhoneVerifier(tokenStore, DomainEventPublisher { }).verify("010-1234-5678")
+        applicationGateway.next = TransitionResponse("app-1", "IDENTITY_VERIFIED", "evt-id", true)
+
+        mockMvc
+            .perform(
+                post("/api/v1/loan-applications/app-1/identity-verifications")
+                    .header("Authorization", "Bearer ${verified.accessToken}"),
+            ).andExpect(status().isOk)
+            .andExpect(jsonPath("$.result").value("VERIFIED"))
+    }
+
+    private class FakeApplicationGateway : ApplicationGateway {
+        lateinit var next: TransitionResponse
+
+        override fun transition(
+            applicationId: String,
+            userId: String,
+            targetState: String,
+        ): TransitionResponse = next
     }
 }
