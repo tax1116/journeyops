@@ -1,0 +1,29 @@
+server:
+  port: 8084
+spring:
+  application:
+    name: loan-contract-api
+logging:
+  structured:
+    format:
+      console: ecs
+      file: ecs
+    json:
+      customizer: dev.journeyops.observability.StructuredLogSanitizer
+  file:
+    name: ${JOURNEYOPS_LOG_FILE:build/logs/loan-contract-api.json}
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  tracing:
+    sampling:
+      probability: 1.0
+journeyops:
+  clients:
+    user-base-url: ${USER_API_BASE_URL:http://localhost:8081}
+    application-base-url: ${LOAN_APPLICATION_API_BASE_URL:http://localhost:8082}
+sentry:
+  dsn: ${SENTRY_DSN:}
+  send-default-pii: false
