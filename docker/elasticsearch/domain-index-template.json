@@ -1,0 +1,10 @@
+{
+  "index_patterns": ["journeyops-domain-*"],
+  "composed_of": ["journeyops-common"],
+  "priority": 300,
+  "template": {
+    "settings": {
+      "index.lifecycle.name": "journeyops-domain-90d"
+    }
+  }
+}

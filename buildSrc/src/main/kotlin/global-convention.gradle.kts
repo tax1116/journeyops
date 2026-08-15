@@ -6,7 +6,7 @@ plugins {
     id("org.jlleitschuh.gradle.ktlint")
 }
 
-group = "kr.co.taek.dev"
+group = "dev.journeyops"
 
 java {
     toolchain {
@@ -32,8 +32,10 @@ tasks.withType<Test> {
 }
 
 dependencies {
+    implementation(kotlin("reflect"))
     implementation(libs.kotlin.logging)
     testImplementation(libs.spring.boot.starter.test)
+    testRuntimeOnly(libs.junit.platform.launcher)
 }
 
 ktlint {

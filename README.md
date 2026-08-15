@@ -1,60 +1,78 @@
-# spring-boot-multi-module-template
+# JourneyOps
 
-스프링 부트 멀티모듈 템플릿 프로젝트
+대출 신청 여정을 실행하면서 Sentry와 Elastic Stack의 역할을 분리해 체험하는 Spring Boot 데모입니다. 애플리케이션은 예상 밖의 예외를 Sentry로 보내고, Filebeat·Elasticsearch·Kibana는 구조화 로그 검색, 서비스 상태, 단일 신청 타임라인, 사용자 퍼널을 담당합니다.
 
-## 기술 스택
+## 구성
 
-- **Language:** Kotlin 2.2.21
-- **Framework:** Spring Boot 4.0.3
-- **Build:** Gradle 9.4.0 (Kotlin DSL)
-- **Java:** 21
-- **Test:** JUnit 5 (spring-boot-starter-test)
-- **Lint:** ktlint
+| 서비스 | 포트 | 책임 |
+|---|---:|---|
+| `user-api` | 8081 | 휴대폰 본인인증, 사용자 조회, 신분증 진위확인 |
+| `loan-application-api` | 8082 | 신청 생성, 상태 전이, 신청서·서류 제출 |
+| `loan-evaluation-api` | 8083 | 한도조회, 대출 심사 |
+| `loan-contract-api` | 8084 | 약정서 작성, 대출금 지급 |
+| Elasticsearch | 9200 | ECS 로그 저장, ILM, 2차 마스킹 |
+| Kibana | 5601 | Discover, 대시보드, query rule |
 
-## 빌드 명령어
+서비스 간 호출은 Spring `RestClient`를 사용합니다. `loan-application-api`가 신청 상태의 단일 소유자이며 다른 서비스는 상태 전이 API를 호출합니다.
+
+## 바로 실행
+
+필수 도구는 Docker, Docker Compose, `curl`, `jq`입니다.
 
 ```bash
-./gradlew build              # 전체 모듈 빌드 및 테스트
-./gradlew check              # 전체 검사 실행 (테스트 + ktlint)
-./gradlew bootRun            # Spring Boot 애플리케이션 실행
-./gradlew bootJar            # 실행 가능한 jar 빌드
-
-# 테스트
-./gradlew test               # 전체 테스트 실행
-./gradlew :demo:test         # 특정 모듈 테스트 실행
-./gradlew test --tests "fully.qualified.TestClass"  # 단일 테스트 클래스 실행
-
-# 린트 (ktlint)
-./gradlew ktlintCheck        # 코드 스타일 검사
-./gradlew ktlintFormat       # 코드 자동 포맷팅
+docker compose -f docker/compose.yml up -d --build
+bash docker/kibana/setup.sh
+bash scripts/smoke.sh
 ```
 
-## 아키텍처
+성공하면 다음 메시지가 출력됩니다.
 
-### 컨벤션 플러그인 시스템 (buildSrc)
+```text
+Journey completed: <applicationId>, 8 application events indexed
+```
 
-빌드 로직은 개별 모듈의 build 파일이 아닌 `buildSrc/src/main/kotlin/`에 컨벤션 플러그인으로 중앙 집중화되어 있다.
+Kibana는 [http://localhost:5601](http://localhost:5601)에서 열 수 있습니다. `JourneyOps - Loan Journey` 대시보드 또는 다섯 개의 Saved Discover session으로 로그를 탐색하세요.
 
-| 플러그인 | 설명 |
-|---|---|
-| `global-convention` | 모든 모듈에 적용. Kotlin JVM, ktlint, Java 21 툴체인, kotlin-logging, JUnit 5, 저장소 설정 |
-| `spring-boot-convention` | Spring Boot 플러그인, dependency-management 플러그인, Kotlin Spring 플러그인(all-open) 적용. bootJar로 실행 가능한 앱 빌드 |
-| `spring-jar-convention` | Spring Boot BOM을 `platform()`으로 가져오는 라이브러리 모듈용. bootJar 없이 일반 jar로 빌드 |
+## 선택적 Sentry 연동
 
-### 새 모듈 추가 방법
+DSN이 없어도 모든 API는 정상 기동합니다. Sentry 프로젝트를 연결하려면 Compose 실행 전에 환경 변수를 설정합니다.
 
-1. 프로젝트 루트에 새 디렉토리 생성
-2. 적절한 컨벤션 플러그인을 적용하는 `build.gradle.kts` 추가
-3. `settings.gradle.kts`에 `include()`로 모듈 등록
-4. Kotlin, 린트, 테스트, 의존성 관리가 자동으로 상속됨
+```bash
+export SENTRY_DSN='https://public@example.ingest.sentry.io/project-id'
+docker compose -f docker/compose.yml up -d --build
+```
 
-### 버전 관리
+예상 밖의 500 오류 경로는 다음과 같이 확인할 수 있습니다.
 
-모든 의존성 버전은 `gradle/libs.versions.toml`(Gradle 버전 카탈로그)에서 중앙 관리.
+```bash
+curl -sS -X POST http://localhost:8081/api/v1/demo/failures
+```
 
-## CI
+Sentry 전송 전 휴대폰 번호, 주민등록번호, 이메일, 카드번호, Bearer token, JWT를 마스킹하며 request body와 인증·쿠키 헤더는 전송하지 않습니다.
 
-GitHub Actions에서 JDK 21(Amazon Corretto) 환경으로 main/dev push와 PR에 `./gradlew check` 실행.
+## 로그 규약
 
-- `org.gradle.caching=true`로 Gradle 빌드 캐시 활성화
-- merge-base 기반 캐싱 전략으로 증분 빌드 최적화
+- 도메인 퍼널은 API URL이 아니라 안정적인 `event.action`으로 집계합니다.
+- 신청 이후 여덟 사건은 `loan.application.id`로 묶습니다.
+- 신청 전 휴대폰 인증은 가명화한 `user.id`로 연결합니다.
+- 임의 MDC는 `custom.*` 아래로 들어가며 예약 ECS 필드를 덮어쓰지 않습니다.
+- 장애 조사는 `trace.id`로 서비스 간 요청을 연결합니다.
+
+자세한 사용법은 [Kibana 퍼널 가이드](docs/kibana-funnel.md)와 [로그 분석 가이드](docs/log-analytics.md)를 참고하세요.
+
+## 로컬 빌드와 테스트
+
+```bash
+./gradlew check
+./gradlew bootJar
+```
+
+## 종료
+
+아래 명령은 컨테이너와 데모용 Elasticsearch·Filebeat 볼륨을 함께 제거합니다.
+
+```bash
+docker compose -f docker/compose.yml down -v
+```
+
+Elastic 보안 비활성화와 고정 암호화 키는 로컬 데모 전용입니다. Kubernetes로 옮길 때는 애플리케이션 이미지는 그대로 사용하고 로그 수집을 DaemonSet/Elastic Agent로, 비밀값을 Secret으로 분리할 수 있습니다.
